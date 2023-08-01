@@ -6,34 +6,45 @@ import threading
 import random
 
 import speech_recognition as sr
-import whisper
+# import whisper
 import openai
 import torch
-from time import sleep
-from sys import platform
+from faster_whisper import WhisperModel
 
 from datetime import datetime, timedelta
 from queue import Queue
 import pyttsx3 
-from gtts import gTTS
-from tempfile import NamedTemporaryFile
-from pydub import AudioSegment
-from pydub.playback import play
-
-# from google.cloud import texttospeech
 
 completion = None
+jokes = []
+isJokeDone = False
 
-with open("dadjokes.txt") as f:
-    jokes = f.readlines()
+def getDadjokes():
+	with open("dadjokes.txt", encoding="utf-8") as f:
+		lines = f.readlines()
 
+	for l in lines:
+		jokes.append(l.split("<>"))
+    
 def play_dadjokes():
-    thread_engine = pyttsx3.init("espeak")
-    thread_engine.say("here's a joke while you are waiting.")
-    thread_engine.say(jokes[random.randint(0, len(jokes)-1)])
+    global isJokeDone
+    print("playing dadjokes")
+    thread_engine = pyttsx3.init()
+    thread_engine.setProperty("rate", 150)
+    
+    random_jokes = "here's a joke while you are waiting." + "".join(jokes[random.randint(0, len(jokes)-1)])
+
+    thread_engine.say(random_jokes)
     thread_engine.runAndWait()
 
+    time.sleep(0.25)
+
+    isJokeDone = True
+
 def chatGPTResponse(text):
+    global completion, isJokeDone
+
+    print("responding")
     completion = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
@@ -43,9 +54,11 @@ def chatGPTResponse(text):
     )
 
 def main():
+    global completion, isJokeDone
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="medium", help="Model to use",
-                        choices=["tiny", "base", "small", "medium", "large"])
+    # parser.add_argument("--model", default="medium", help="Model to use",
+    #                     choices=["tiny", "base", "small", "medium", "large"])
     parser.add_argument("--non_english", action='store_true',
                         help="Don't use the english model.")
     parser.add_argument("--energy_threshold", default=1000,
@@ -55,10 +68,7 @@ def main():
     parser.add_argument("--phrase_timeout", default=3,
                         help="How much empty space between recordings before we "
                              "consider it a new line in the transcription.", type=float)  
-    if 'linux' in platform:
-        parser.add_argument("--default_microphone", default='pulse',
-                            help="Default microphone name for SpeechRecognition. "
-                                 "Run this with 'list' to view available Microphones.", type=str)
+    
     args = parser.parse_args()
     
     # The last time a recording was retreived from the queue.
@@ -81,32 +91,19 @@ def main():
     # SpeechRecognizer never stops recording.
     recorder.dynamic_energy_threshold = False
     
-    source = sr.Microphone(sample_rate=16000)
-    # Important for linux users. 
-    # Prevents permanent application hang and crash by using the wrong Microphone
-    if 'linux' in platform:
-        mic_name = args.default_microphone
-        if not mic_name or mic_name == 'list':
-            print("Available microphone devices are: ")
-            for index, name in enumerate(sr.Microphone.list_microphone_names()):
-                print(f"Microphone with name \"{name}\" found")   
-            return
-        else:
-            for index, name in enumerate(sr.Microphone.list_microphone_names()):
-                if mic_name in name:
-                    source = sr.Microphone(sample_rate=16000, device_index=index)
-                    break
-        
+    source = sr.Microphone(sample_rate=16000, device_index=2)
+
     # Load / Download model
-    model = args.model
-    if args.model != "large" and not args.non_english:
-        model = model + ".en"
-    audio_model = whisper.load_model(model)
+    # model = args.model
+    # if args.model != "large" and not args.non_english:
+    #     model = model + ".en"
+    # audio_model = whisper.load_model(model)
+    
+    audio_model = WhisperModel("large-v2", device="cuda", compute_type="float16")
 
     record_timeout = args.record_timeout
     phrase_timeout = args.phrase_timeout
 
-    temp_file = NamedTemporaryFile().name
     transcription = ['']
 
     # def record_callback(_, audio:sr.AudioData) -> None:
@@ -127,9 +124,10 @@ def main():
 
     openai.api_key = os.getenv("OPENAI_API_KEY")
 
-    engine = pyttsx3.init("espeak")
+    engine = pyttsx3.init()
 
     t1 = threading.Thread(target=play_dadjokes)
+    t1.daemon = False
 
     while True:
         try:
@@ -168,42 +166,48 @@ def main():
                 audio_data = sr.AudioData(last_sample, source.SAMPLE_RATE, source.SAMPLE_WIDTH)
                 wav_data = io.BytesIO(audio_data.get_wav_data())
 
-                # Write wav data to the temporary file as bytes.
-                with open(temp_file, 'w+b') as f:
-                    f.write(wav_data.read())
-
                 start_time = time.time()
 
-                # Read the transcription.
-                # while not done:
-                
-                result = audio_model.transcribe(temp_file)
+                segments, _ = audio_model.transcribe(wav_data, beam_size=5)
                 print("time spend in transcribing audio data: ", time.time() - start_time)
 
-                text = result['text'].strip()
+                text = ""
+                for s in segments:
+                    text += s.text
+
                 print(text)
 
-                start_time = time.time()
+                # start_time = time.time()
 
                 done = False
+                t2 = threading.Thread(target=chatGPTResponse, args=[text])
+                t2.start()
+
                 while not done:
-                    if completion:
-                        break
-
-
-
+                    # print("is t1 alive? ", t1.is_alive())
+                    # print("is joke done? ", isJokeDone)
+                    # if completion == None and not t1.is_alive():
+                    #     # t1 = threading.Thread(target=play_dadjokes)
+                    #     t1.start()
                     
+                    time.sleep(0.5)
+                    
+                    if completion != None:
+                        done = True
 
-                print("time spend in GPT response: ", time.time() - start_time)
+                # print("time spend in GPT response: ", time.time() - start_time)
 
-                summary = completion.choices[0].message["content"]
-                print(summary)
+                # summary = completion.choices[0].message["content"]
+                # print(summary)
 
-                engine.say(summary)
+                engine.say(completion.choices[0].message["content"])
                 engine.runAndWait()
 
+                completion = None
+                isJokeDone = False
+
                 # Infinite loops are bad for processors, must sleep.
-                sleep(0.25)
+                time.sleep(0.25)
         except KeyboardInterrupt:
             break
 
@@ -213,4 +217,6 @@ def main():
 
 
 if __name__ == "__main__":
+    getDadjokes()
+    # print(jokes)
     main()
