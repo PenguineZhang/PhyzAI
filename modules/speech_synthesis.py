@@ -21,7 +21,9 @@ class SpeechSynthesis:
         self._engine.say(text)
         self._engine.runAndWait()
 
+    # this function may not be useful 
     def sayJokes(self):
+        print("telling you a dad joke")
         random_jokes = random.randint(0, len(self._jokes)-1)
 
         joke = "".join(self._jokes[random_jokes])
