@@ -11,3 +11,6 @@ for index, name in enumerate(sr.Microphone.list_microphone_names()):
     - tested on my computer (i5-12600K, RTX 3060, NVidia v522.04, CUDA 11.8)
       - 0.88 - 1.02 seconds
   - [whisper-cpp](https://github.com/ggerganov/whisper.cpp)
+
+
+**For Sarah:** I separated speech recognition from microphone, transcription, GPT-3.5, and speech synthesis into individual classes so they become more manageable. `main.py` integrates them all. So running `main.py` should run all the elements.
