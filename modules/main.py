@@ -2,17 +2,34 @@ import keyboard
 import time
 
 from listener import Listener
-from stt import Speech2TextModel
-from chatgpt import Chat
-from speech_synthesis import SpeechSynthesis
+from speaker import Speech2TextModel
+
+import multiprocessing
+from functools import partial
+
+def playSound(queue: multiprocessing.Queue):
+    from speech_synthesis import SpeechSynthesis
+    talker = SpeechSynthesis()
+
+    while True:
+        if queue.empty():
+            talker.say("thinking")
+        else:
+            talker.say(queue.get())
+            break
+
+def chatbotRespond(text: str, queue: multiprocessing.Queue):
+    from chatgpt import Chat
+    chatbot = Chat()
+    response = chatbot.respond(text)
+    queue.put(response)
 
 def main():
     listener = Listener()
     transcriber = Speech2TextModel()
-    chatbot = Chat()
-    speaker = SpeechSynthesis()
 
     print("whisper model loaded")
+    queue = multiprocessing.Queue()
 
     while True:
         try:
@@ -22,8 +39,18 @@ def main():
                 audio_data = listener.get_audio_data()
                 if audio_data:
                     text = transcriber.transcribe(audio_data)
-                    response = chatbot.respond(text)
-                    speaker.say(response)
+
+                    # spawn two processes - on playsound process, it will keep playing "thinking" 
+                    # while getting response from the chatbotRespond process 
+                    func1 = partial(chatbotRespond, text)
+                    process1 = multiprocessing.Process(target=func1, args=(queue, ))
+                    process2 = multiprocessing.Process(target=playSound, args=(queue, ))
+
+                    process2.start()
+                    process1.start()
+
+                    process2.join()
+                    process1.join()
 
         except KeyboardInterrupt:
             break
